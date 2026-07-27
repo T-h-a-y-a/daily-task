@@ -177,10 +177,33 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
     showToast('Comment deleted');
   };
 
-  const isWithinOneHour = (dateString) => {
+  const isWithinFourHours = (dateString) => {
+    if (!dateString) return false;
     const commentDate = new Date(dateString).getTime();
+    if (isNaN(commentDate)) return false;
     const now = Date.now();
-    return (now - commentDate) <= 60 * 60 * 1000;
+    return (now - commentDate) <= 4 * 60 * 60 * 1000;
+  };
+
+  const canDeleteOrEdit = (c) => {
+    if (!c) return false;
+    if (currentUser?.role === 'admin') return true;
+    return c.authorId === currentUser?.id && isWithinFourHours(c.createdAt);
+  };
+
+  const handleRemoveAttachment = (commentId) => {
+    const updatedComments = comments.map(c => {
+      if (c.id === commentId) {
+        const copy = { ...c };
+        delete copy.fileName;
+        delete copy.fileData;
+        return copy;
+      }
+      return c;
+    });
+    setComments(updatedComments);
+    onSave({ comments: updatedComments, readBy: [currentUser.id] });
+    showToast('Attached file deleted');
   };
 
   return (
@@ -193,7 +216,12 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
           </button>
         </div>
         
-        <p style={styles.taskTitle}>Task: {task.title}</p>
+        <p style={styles.taskTitle}>
+          Task: {task.title}
+          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+            ℹ️ Comments & uploaded files can be edited/deleted within 4 hours.
+          </span>
+        </p>
 
         {toastMessage && (
           <div style={styles.toast}>
@@ -213,18 +241,18 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                     <span style={styles.commentDate}>
                       {new Date(c.createdAt).toLocaleDateString()} {new Date(c.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                     </span>
-                    {c.authorId === currentUser.id && isWithinOneHour(c.createdAt) && (
+                    {canDeleteOrEdit(c) && (
                       <button 
                         onClick={() => handleDeleteComment(c.id)} 
                         style={styles.deleteBtn}
-                        title="Delete Comment"
+                        title="Delete Comment (Allowed within 4 hours)"
                       >
                         <Trash2 size={14} />
                       </button>
                     )}
                   </div>
                 </div>
-                {c.authorId === currentUser.id && isWithinOneHour(c.createdAt) ? (
+                {c.authorId === currentUser.id && isWithinFourHours(c.createdAt) ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <textarea
                       className="input-field"
@@ -235,13 +263,26 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                       placeholder="Write a comment..."
                     />
                     {c.fileName && c.fileData && (
-                      isAudioFile(c.fileName, c.fileData) ? (
-                        <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          <audio 
-                            controls 
-                            src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
-                            style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
-                          />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {isAudioFile(c.fileName, c.fileData) ? (
+                          <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <audio 
+                              controls 
+                              src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                              style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
+                            />
+                            <a 
+                              href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                              download={c.fileName} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              style={styles.attachmentLink}
+                            >
+                              <Download size={14} />
+                              Download Voice Note ({c.fileName})
+                            </a>
+                          </div>
+                        ) : (
                           <a 
                             href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
                             download={c.fileName} 
@@ -250,34 +291,59 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                             style={styles.attachmentLink}
                           >
                             <Download size={14} />
-                            Download Voice Note ({c.fileName})
+                            {c.fileName}
                           </a>
-                        </div>
-                      ) : (
-                        <a 
-                          href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
-                          download={c.fileName} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          style={styles.attachmentLink}
-                        >
-                          <Download size={14} />
-                          {c.fileName}
-                        </a>
-                      )
+                        )}
+                        {canDeleteOrEdit(c) && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveAttachment(c.id)}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '0.75rem',
+                              color: '#ef4444',
+                              backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              marginTop: '8px'
+                            }}
+                            title="Delete file attachment (within 4 hours)"
+                          >
+                            <Trash2 size={12} />
+                            Remove File
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 ) : (
                   <div style={styles.commentBubble}>
                     {c.text && <div style={{ marginBottom: c.fileName ? '8px' : '0' }}>{c.text}</div>}
                     {c.fileName && c.fileData && (
-                      isAudioFile(c.fileName, c.fileData) ? (
-                        <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          <audio 
-                            controls 
-                            src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
-                            style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
-                          />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {isAudioFile(c.fileName, c.fileData) ? (
+                          <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <audio 
+                              controls 
+                              src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                              style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
+                            />
+                            <a 
+                              href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                              download={c.fileName} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              style={styles.attachmentLink}
+                            >
+                              <Download size={14} />
+                              Download Voice Note ({c.fileName})
+                            </a>
+                          </div>
+                        ) : (
                           <a 
                             href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
                             download={c.fileName} 
@@ -286,21 +352,33 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                             style={styles.attachmentLink}
                           >
                             <Download size={14} />
-                            Download Voice Note ({c.fileName})
+                            {c.fileName}
                           </a>
-                        </div>
-                      ) : (
-                        <a 
-                          href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
-                          download={c.fileName} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          style={styles.attachmentLink}
-                        >
-                          <Download size={14} />
-                          {c.fileName}
-                        </a>
-                      )
+                        )}
+                        {canDeleteOrEdit(c) && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveAttachment(c.id)}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '0.75rem',
+                              color: '#ef4444',
+                              backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              marginTop: '8px'
+                            }}
+                            title="Delete file attachment (within 4 hours)"
+                          >
+                            <Trash2 size={12} />
+                            Remove File
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}

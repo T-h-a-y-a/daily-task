@@ -19,6 +19,14 @@ export default function ReportFilesPage({ task, onBack, onSave, isAdmin }) {
   const [isConverting, setIsConverting] = useState(false);
   const fileInputRef = useRef(null);
 
+  const isWithinFourHours = (dateString) => {
+    if (!dateString) return false;
+    const uploadTime = new Date(dateString).getTime();
+    if (isNaN(uploadTime)) return false;
+    const now = Date.now();
+    return (now - uploadTime) <= 4 * 60 * 60 * 1000;
+  };
+
   // Convert DOCX/XLSX to HTML when previewFile changes
   useEffect(() => {
     if (!previewFile) {
@@ -401,12 +409,12 @@ export default function ReportFilesPage({ task, onBack, onSave, isAdmin }) {
                         >
                           <Download size={16} />
                         </a>
-                        {/* Delete — admin only */}
-                        {isAdmin && (
+                        {/* Delete — admin or uploaded within 4 hours */}
+                        {(isAdmin || isWithinFourHours(file.uploadedAt)) && (
                           <button
                             style={styles.deleteFileBtn}
                             onClick={() => handleDeleteFile(file.id)}
-                            title="Delete file"
+                            title="Delete file (Allowed within 4 hours)"
                           >
                             <Trash2 size={16} />
                           </button>

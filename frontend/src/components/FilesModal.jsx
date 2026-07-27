@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { X, Paperclip, Download, Plus, FileText } from 'lucide-react';
+import { X, Paperclip, Download, Plus, FileText, Trash2 } from 'lucide-react';
 
 export default function FilesModal({ task, onClose, onSave }) {
   // Merge legacy file with new files array
@@ -13,6 +13,21 @@ export default function FilesModal({ task, onClose, onSave }) {
   const initialFiles = task.files?.length > 0 ? task.files : legacyFile;
   const [files, setFiles] = useState(initialFiles);
   const fileInputRef = useRef(null);
+
+  const isWithinFourHours = (dateString) => {
+    if (!dateString) return false;
+    const uploadTime = new Date(dateString).getTime();
+    if (isNaN(uploadTime)) return false;
+    const now = Date.now();
+    return (now - uploadTime) <= 4 * 60 * 60 * 1000;
+  };
+
+  const handleDeleteFile = (fileId) => {
+    if (!confirm('Are you sure you want to delete this file?')) return;
+    const updatedFiles = files.filter(f => f.id !== fileId);
+    setFiles(updatedFiles);
+    onSave({ files: updatedFiles });
+  };
 
   // sort files date-wise (newest first)
   const sortedFiles = [...files].sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
@@ -48,7 +63,7 @@ export default function FilesModal({ task, onClose, onSave }) {
         <div style={styles.header}>
           <div>
             <h2 style={styles.title}>Files for Task: {task.title}</h2>
-            <p style={styles.subtitle}>Manage uploaded reports.</p>
+            <p style={styles.subtitle}>Manage uploaded reports (Files can be deleted within 4 hours of upload).</p>
           </div>
           <button style={styles.closeBtn} onClick={onClose}>
             <X size={20} />
@@ -91,10 +106,31 @@ export default function FilesModal({ task, onClose, onSave }) {
                   <div style={styles.fileName}>{file.name}</div>
                   <div style={styles.fileDate}>{new Date(file.uploadAt || file.uploadedAt).toLocaleString()}</div>
                 </div>
-                <a href={file.data} download={file.name} style={styles.downloadBtn} onClick={e => e.stopPropagation()}>
-                  <Download size={18} />
-                  View
-                </a>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <a href={file.data} download={file.name} style={styles.downloadBtn} onClick={e => e.stopPropagation()}>
+                    <Download size={18} />
+                    View
+                  </a>
+                  {isWithinFourHours(file.uploadAt || file.uploadedAt) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.id); }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '8px',
+                        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                        color: '#ef4444',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '8px',
+                        cursor: 'pointer'
+                      }}
+                      title="Delete file (Allowed within 4 hours of upload)"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
               </div>
             ))
           )}
