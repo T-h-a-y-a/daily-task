@@ -3,6 +3,9 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
+const path = require('path');
+const fs = require('fs');
+
 const User = require('./models/User');
 const Task = require('./models/Task');
 
@@ -10,6 +13,13 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Setup static uploads folder
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
 
 mongoose.connect(process.env.MONGODB_URI)
   .then(async () => {
@@ -88,6 +98,30 @@ app.put('/api/tasks/:id', async (req, res) => {
     res.json(updatedTask);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// --- Upload Endpoint ---
+app.post('/api/upload', (req, res) => {
+  try {
+    const { name, data } = req.body;
+    if (!name || !data) {
+      return res.status(400).json({ error: 'Missing name or data' });
+    }
+
+    const base64Data = data.replace(/^data:.*;base64,/, '');
+    const fileId = Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+    const safeName = name.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const filename = `${fileId}-${safeName}`;
+    const filePath = path.join(uploadsDir, filename);
+
+    fs.writeFileSync(filePath, base64Data, 'base64');
+
+    const fileUrl = `/uploads/${filename}`;
+    res.json({ fileName: name, fileUrl });
+  } catch (err) {
+    console.error('File upload error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

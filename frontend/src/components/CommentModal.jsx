@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { X, Send, Trash2, Paperclip, Download } from 'lucide-react';
+import { X, Send, Trash2, Paperclip, Download, Mic, Square } from 'lucide-react';
 
 export default function CommentModal({ task, currentUser, onClose, onSave }) {
   // Ensure comments is an array (handle legacy string comments if any)
@@ -15,13 +15,86 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
   const [attachment, setAttachment] = useState(null);
   const fileInputRef = useRef(null);
 
+  const [isUploading, setIsUploading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const timerRef = useRef(null);
+
+  const API_URL = import.meta.env.VITE_API_URL || '';
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Audio = reader.result;
+          const now = new Date();
+          const timestamp = `${now.getHours()}${now.getMinutes()}${now.getSeconds()}`;
+          setAttachment({
+            name: `Voice_Note_${timestamp}.webm`,
+            data: base64Audio
+          });
+          showToast('Voice note recorded and attached!');
+        };
+        reader.readAsDataURL(audioBlob);
+
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Microphone error:', err);
+      showToast('Microphone access denied or unavailable');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const isAudioFile = (fileName, fileData) => {
+    if (!fileName && !fileData) return false;
+    const name = (fileName || '').toLowerCase();
+    const data = (fileData || '').toLowerCase();
+    return name.endsWith('.webm') || name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg') || name.endsWith('.m4a') || data.startsWith('data:audio') || (data.includes('/uploads/') && (name.includes('voice') || name.endsWith('.webm') || name.endsWith('.mp3') || name.endsWith('.wav')));
+  };
+
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     
-    // Check size limit (e.g., 2MB max for base64 storage)
-    if (file.size > 2 * 1024 * 1024) {
-      showToast('File must be smaller than 2MB');
+    // Check size limit: max 30MB
+    if (file.size > 30 * 1024 * 1024) {
+      showToast('File must be smaller than 30MB');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -43,9 +116,34 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
     }, 3000);
   };
 
-  const handleAddComment = (e) => {
+  const handleAddComment = async (e) => {
     e.preventDefault();
-    if (!newComment.trim()) return;
+    if (!newComment.trim() && !attachment) return;
+
+    let fileName = null;
+    let fileUrl = null;
+
+    if (attachment) {
+      setIsUploading(true);
+      fileName = attachment.name;
+      fileUrl = attachment.data; // default fallback
+
+      try {
+        const res = await fetch(`${API_URL}/api/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: attachment.name, data: attachment.data })
+        });
+        if (res.ok) {
+          const result = await res.json();
+          fileUrl = result.fileUrl;
+        }
+      } catch (err) {
+        console.error('Error uploading file to server:', err);
+      } finally {
+        setIsUploading(false);
+      }
+    }
 
     const comment = {
       id: crypto.randomUUID(),
@@ -53,13 +151,14 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
       authorId: currentUser.id,
       authorName: currentUser.username,
       createdAt: new Date().toISOString(),
-      ...(attachment ? { fileName: attachment.name, fileData: attachment.data } : {})
+      ...(fileName ? { fileName, fileData: fileUrl } : {})
     };
 
     const updatedComments = [...comments, comment];
     setComments(updatedComments);
     setNewComment('');
     setAttachment(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     onSave({ comments: updatedComments, readBy: [currentUser.id] });
   };
 
@@ -126,22 +225,82 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                   </div>
                 </div>
                 {c.authorId === currentUser.id && isWithinOneHour(c.createdAt) ? (
-                  <textarea
-                    className="input-field"
-                    value={c.text}
-                    onChange={(e) => handleUpdateComment(c.id, e.target.value)}
-                    onBlur={() => showToast('Comment has been updated')}
-                    style={{ resize: 'vertical', minHeight: '60px' }}
-                    placeholder="Empty comment..."
-                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <textarea
+                      className="input-field"
+                      value={c.text}
+                      onChange={(e) => handleUpdateComment(c.id, e.target.value)}
+                      onBlur={() => showToast('Comment has been updated')}
+                      style={{ resize: 'vertical', minHeight: '60px' }}
+                      placeholder="Write a comment..."
+                    />
+                    {c.fileName && c.fileData && (
+                      isAudioFile(c.fileName, c.fileData) ? (
+                        <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <audio 
+                            controls 
+                            src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                            style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
+                          />
+                          <a 
+                            href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                            download={c.fileName} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={styles.attachmentLink}
+                          >
+                            <Download size={14} />
+                            Download Voice Note ({c.fileName})
+                          </a>
+                        </div>
+                      ) : (
+                        <a 
+                          href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                          download={c.fileName} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          style={styles.attachmentLink}
+                        >
+                          <Download size={14} />
+                          {c.fileName}
+                        </a>
+                      )
+                    )}
+                  </div>
                 ) : (
                   <div style={styles.commentBubble}>
-                    {c.text}
+                    {c.text && <div style={{ marginBottom: c.fileName ? '8px' : '0' }}>{c.text}</div>}
                     {c.fileName && c.fileData && (
-                      <a href={c.fileData} download={c.fileName} style={styles.attachmentLink}>
-                        <Download size={14} />
-                        {c.fileName}
-                      </a>
+                      isAudioFile(c.fileName, c.fileData) ? (
+                        <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <audio 
+                            controls 
+                            src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                            style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
+                          />
+                          <a 
+                            href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                            download={c.fileName} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={styles.attachmentLink}
+                          >
+                            <Download size={14} />
+                            Download Voice Note ({c.fileName})
+                          </a>
+                        </div>
+                      ) : (
+                        <a 
+                          href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                          download={c.fileName} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          style={styles.attachmentLink}
+                        >
+                          <Download size={14} />
+                          {c.fileName}
+                        </a>
+                      )
                     )}
                   </div>
                 )}
@@ -158,30 +317,77 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
             onChange={(e) => setNewComment(e.target.value)}
             style={{ resize: 'vertical', minHeight: '80px' }}
           />
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', alignSelf: 'flex-end' }}>
-            {task.type === 'report' && (
-              <>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  style={{ display: 'none' }} 
-                  onChange={handleFileSelect}
-                />
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', alignSelf: 'flex-end', flexWrap: 'wrap' }}>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              style={{ display: 'none' }} 
+              onChange={handleFileSelect}
+            />
+
+            {/* Voice Record Button */}
+            {isRecording ? (
+              <button 
+                type="button" 
+                className="btn-secondary" 
+                style={styles.recordingBtn}
+                onClick={stopRecording}
+                title="Click to stop recording"
+              >
+                <Square size={14} fill="#ef4444" color="#ef4444" />
+                <span>Stop ({formatTime(recordingTime)})</span>
+              </button>
+            ) : (
+              <button 
+                type="button" 
+                className="btn-secondary" 
+                style={styles.micBtn}
+                onClick={startRecording}
+                title="Record Voice Note"
+                disabled={isUploading}
+              >
+                <Mic size={16} />
+                Voice
+              </button>
+            )}
+
+            {/* File Attachment Button */}
+            {attachment ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                 <button 
                   type="button" 
                   className="btn-secondary" 
-                  style={attachment ? styles.attachBtnActive : styles.attachBtn}
+                  style={styles.attachBtnActive}
                   onClick={() => fileInputRef.current?.click()}
-                  title={attachment ? attachment.name : 'Attach File'}
+                  title={attachment.name}
                 >
                   <Paperclip size={16} />
-                  {attachment ? 'File Attached' : 'Attach File'}
+                  {attachment.name.length > 18 ? attachment.name.slice(0, 18) + '...' : attachment.name}
                 </button>
-              </>
+                <button
+                  type="button"
+                  onClick={() => { setAttachment(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
+                  style={{ padding: '6px', color: '#ef4444', background: 'rgba(239, 68, 68, 0.15)', borderRadius: '6px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                  title="Remove Attachment"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <button 
+                type="button" 
+                className="btn-secondary" 
+                style={styles.attachBtn}
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach File (Max 30MB)"
+              >
+                <Paperclip size={16} />
+                Attach File
+              </button>
             )}
-            <button type="submit" className="btn-primary" style={styles.submitBtn} disabled={!newComment.trim()}>
+            <button type="submit" className="btn-primary" style={styles.submitBtn} disabled={(!newComment.trim() && !attachment) || isUploading || isRecording}>
               <Send size={16} />
-              Post Comment
+              {isUploading ? 'Uploading...' : 'Post Comment'}
             </button>
           </div>
         </form>
@@ -318,6 +524,24 @@ const styles = {
     gap: '6px',
     padding: '8px 12px',
     fontSize: '0.85rem'
+  },
+  micBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '8px 12px',
+    fontSize: '0.85rem',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  recordingBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '8px 12px',
+    fontSize: '0.85rem',
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    color: '#ef4444',
+    border: '1px solid rgba(239, 68, 68, 0.4)',
   },
   attachBtnActive: {
     display: 'flex',
