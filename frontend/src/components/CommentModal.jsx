@@ -19,6 +19,7 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef(null);
+  const recognitionRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
 
@@ -47,12 +48,43 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
             name: `Voice_Note_${timestamp}.webm`,
             data: base64Audio
           });
-          showToast('Voice note recorded and attached!');
+          showToast('Voice note recorded & converted to text!');
         };
         reader.readAsDataURL(audioBlob);
 
         stream.getTracks().forEach(track => track.stop());
       };
+
+      // Speech-to-Text conversion using Web Speech API
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        try {
+          recognitionRef.current = new SpeechRecognition();
+          recognitionRef.current.continuous = true;
+          recognitionRef.current.interimResults = true;
+          recognitionRef.current.lang = 'en-US';
+
+          const existingText = newComment ? newComment.trim() + ' ' : '';
+
+          recognitionRef.current.onresult = (event) => {
+            let speechToText = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              speechToText += event.results[i][0].transcript;
+            }
+            if (speechToText) {
+              setNewComment(existingText + speechToText);
+            }
+          };
+
+          recognitionRef.current.onerror = (err) => {
+            console.warn('Speech recognition status:', err.error);
+          };
+
+          recognitionRef.current.start();
+        } catch (speechErr) {
+          console.warn('SpeechRecognition start error:', speechErr);
+        }
+      }
 
       mediaRecorderRef.current.start();
       setIsRecording(true);
@@ -62,13 +94,24 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
       }, 1000);
     } catch (err) {
       console.error('Microphone error:', err);
-      showToast('Microphone access denied or unavailable');
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        showToast('Microphone permission updated! Please click the blue "Reload" button at the top of your browser bar.');
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        showToast('No microphone device found on your computer or phone.');
+      } else {
+        showToast('Microphone error: ' + (err.message || 'Access denied or unavailable'));
+      }
     }
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
       setIsRecording(false);
       if (timerRef.current) clearInterval(timerRef.current);
     }
@@ -263,26 +306,46 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                       placeholder="Write a comment..."
                     />
                     {c.fileName && c.fileData && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        {isAudioFile(c.fileName, c.fileData) ? (
-                          <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <audio 
-                              controls 
-                              src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
-                              style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
-                            />
+                      isAudioFile(c.fileName, c.fileData) ? (
+                        <div style={styles.voiceCard}>
+                          <div style={styles.voiceHeader}>
+                            <Mic size={16} color="var(--accent-primary)" />
+                            <span style={{ fontWeight: '600', fontSize: '0.85rem', color: 'var(--accent-primary)' }}>Voice Note</span>
+                          </div>
+                          
+                          <audio 
+                            controls 
+                            src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                            style={{ width: '100%', maxWidth: '340px', height: '38px', borderRadius: '8px', marginTop: '4px' }}
+                          />
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
                             <a 
                               href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
                               download={c.fileName} 
                               target="_blank" 
                               rel="noopener noreferrer"
-                              style={styles.attachmentLink}
+                              style={styles.voiceDownloadBtn}
                             >
                               <Download size={14} />
-                              Download Voice Note ({c.fileName})
+                              Download Voice File ({c.fileName})
                             </a>
+
+                            {canDeleteOrEdit(c) && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveAttachment(c.id)}
+                                style={styles.voiceRemoveBtn}
+                                title="Delete file attachment (within 4 hours)"
+                              >
+                                <Trash2 size={12} />
+                                Remove File
+                              </button>
+                            )}
                           </div>
-                        ) : (
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
                           <a 
                             href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
                             download={c.fileName} 
@@ -293,57 +356,76 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                             <Download size={14} />
                             {c.fileName}
                           </a>
-                        )}
-                        {canDeleteOrEdit(c) && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveAttachment(c.id)}
-                            style={{
-                              padding: '4px 8px',
-                              fontSize: '0.75rem',
-                              color: '#ef4444',
-                              backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                              border: '1px solid rgba(239, 68, 68, 0.3)',
-                              borderRadius: '6px',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              marginTop: '8px'
-                            }}
-                            title="Delete file attachment (within 4 hours)"
-                          >
-                            <Trash2 size={12} />
-                            Remove File
-                          </button>
-                        )}
-                      </div>
+                          {canDeleteOrEdit(c) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveAttachment(c.id)}
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '0.75rem',
+                                color: '#ef4444',
+                                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                              title="Delete file attachment (within 4 hours)"
+                            >
+                              <Trash2 size={12} />
+                              Remove File
+                            </button>
+                          )}
+                        </div>
+                      )
                     )}
                   </div>
                 ) : (
                   <div style={styles.commentBubble}>
                     {c.text && <div style={{ marginBottom: c.fileName ? '8px' : '0' }}>{c.text}</div>}
                     {c.fileName && c.fileData && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        {isAudioFile(c.fileName, c.fileData) ? (
-                          <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <audio 
-                              controls 
-                              src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
-                              style={{ width: '100%', maxWidth: '320px', height: '38px', borderRadius: '8px' }}
-                            />
+                      isAudioFile(c.fileName, c.fileData) ? (
+                        <div style={styles.voiceCard}>
+                          <div style={styles.voiceHeader}>
+                            <Mic size={16} color="var(--accent-primary)" />
+                            <span style={{ fontWeight: '600', fontSize: '0.85rem', color: 'var(--accent-primary)' }}>Voice Note</span>
+                          </div>
+                          
+                          <audio 
+                            controls 
+                            src={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
+                            style={{ width: '100%', maxWidth: '340px', height: '38px', borderRadius: '8px', marginTop: '4px' }}
+                          />
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
                             <a 
                               href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
                               download={c.fileName} 
                               target="_blank" 
                               rel="noopener noreferrer"
-                              style={styles.attachmentLink}
+                              style={styles.voiceDownloadBtn}
                             >
                               <Download size={14} />
-                              Download Voice Note ({c.fileName})
+                              Download Voice File ({c.fileName})
                             </a>
+
+                            {canDeleteOrEdit(c) && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveAttachment(c.id)}
+                                style={styles.voiceRemoveBtn}
+                                title="Delete file attachment (within 4 hours)"
+                              >
+                                <Trash2 size={12} />
+                                Remove File
+                              </button>
+                            )}
                           </div>
-                        ) : (
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
                           <a 
                             href={c.fileData.startsWith('/uploads') ? `${API_URL}${c.fileData}` : c.fileData} 
                             download={c.fileName} 
@@ -354,31 +436,30 @@ export default function CommentModal({ task, currentUser, onClose, onSave }) {
                             <Download size={14} />
                             {c.fileName}
                           </a>
-                        )}
-                        {canDeleteOrEdit(c) && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveAttachment(c.id)}
-                            style={{
-                              padding: '4px 8px',
-                              fontSize: '0.75rem',
-                              color: '#ef4444',
-                              backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                              border: '1px solid rgba(239, 68, 68, 0.3)',
-                              borderRadius: '6px',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              marginTop: '8px'
-                            }}
-                            title="Delete file attachment (within 4 hours)"
-                          >
-                            <Trash2 size={12} />
-                            Remove File
-                          </button>
-                        )}
-                      </div>
+                          {canDeleteOrEdit(c) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveAttachment(c.id)}
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '0.75rem',
+                                color: '#ef4444',
+                                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                              title="Delete file attachment (within 4 hours)"
+                            >
+                              <Trash2 size={12} />
+                              Remove File
+                            </button>
+                          )}
+                        </div>
+                      )
                     )}
                   </div>
                 )}
@@ -643,5 +724,45 @@ const styles = {
     textDecoration: 'none',
     fontSize: '0.8rem',
     fontWeight: '500'
+  },
+  voiceCard: {
+    backgroundColor: 'rgba(99, 102, 241, 0.08)',
+    border: '1px solid rgba(99, 102, 241, 0.25)',
+    borderRadius: '12px',
+    padding: '14px',
+    marginTop: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px'
+  },
+  voiceHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px'
+  },
+  voiceDownloadBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '6px 12px',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: '6px',
+    color: 'var(--accent-primary)',
+    textDecoration: 'none',
+    fontSize: '0.8rem',
+    fontWeight: '500',
+    transition: 'background-color 0.2s'
+  },
+  voiceRemoveBtn: {
+    padding: '6px 12px',
+    fontSize: '0.8rem',
+    color: '#ef4444',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    border: '1px solid rgba(239, 68, 68, 0.3)',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px'
   }
 };
