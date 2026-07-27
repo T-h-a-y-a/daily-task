@@ -2,9 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const User = require('./models/User');
 const Task = require('./models/Task');
@@ -14,30 +14,88 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Setup static uploads folder
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Setup static uploads folder safely in writable /tmp directory for serverless runtime
+const uploadsDir = path.join(os.tmpdir(), 'uploads');
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.use('/uploads', express.static(uploadsDir));
+} catch (err) {
+  console.warn('Uploads directory warning:', err.message);
 }
-app.use('/uploads', express.static(uploadsDir));
 
-mongoose.connect(process.env.MONGODB_URI)
-  .then(async () => {
-    console.log('Connected to MongoDB');
-    // Seed admin if doesn't exist
-    const adminUser = await User.findOne({ username: process.env.ADMIN_USERNAME });
-    if (!adminUser && process.env.ADMIN_USERNAME) {
-      const { v4: uuidv4 } = require('uuid');
-      await User.create({
-        id: uuidv4(),
-        username: process.env.ADMIN_USERNAME,
-        password: process.env.ADMIN_PASSWORD,
-        role: 'admin'
-      });
-      console.log('Seeded default admin user');
+// MongoDB Connection Caching for Serverless (Vercel)
+let cached = global.mongoose;
+if (!cached) {
+  cached = global.mongoose = { conn: null, promise: null };
+}
+
+async function connectDB() {
+  if (cached.conn) {
+    return cached.conn;
+  }
+
+  if (!process.env.MONGODB_URI) {
+    throw new Error('MONGODB_URI environment variable is missing.');
+  }
+
+  if (!cached.promise) {
+    const opts = {
+      bufferCommands: false,
+    };
+
+    cached.promise = mongoose.connect(process.env.MONGODB_URI, opts).then(async (mongooseInstance) => {
+      console.log('Connected to MongoDB');
+      // Seed default admin if doesn't exist
+      try {
+        if (process.env.ADMIN_USERNAME) {
+          const adminUser = await User.findOne({ username: process.env.ADMIN_USERNAME });
+          if (!adminUser) {
+            const { v4: uuidv4 } = require('uuid');
+            await User.create({
+              id: uuidv4(),
+              username: process.env.ADMIN_USERNAME,
+              password: process.env.ADMIN_PASSWORD || 'admin123',
+              role: 'admin'
+            });
+            console.log('Seeded default admin user');
+          }
+        }
+      } catch (seedErr) {
+        console.error('Error seeding admin user:', seedErr);
+      }
+      return mongooseInstance;
+    });
+  }
+
+  try {
+    cached.conn = await cached.promise;
+  } catch (e) {
+    cached.promise = null;
+    throw e;
+  }
+
+  return cached.conn;
+}
+
+// Middleware to ensure DB is connected for API requests
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    try {
+      await connectDB();
+    } catch (err) {
+      console.error('MongoDB connection error:', err);
+      return res.status(500).json({ error: 'Database connection failed: ' + err.message });
     }
-  })
-  .catch(err => console.error('MongoDB connection error:', err));
+  }
+  next();
+});
+
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.status(200).send('SEO Dashboard API Server is running');
+});
 
 // --- Users API ---
 app.get('/api/users', async (req, res) => {
@@ -164,10 +222,11 @@ app.delete('/api/tasks/:id', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
 
 module.exports = app;
+
