@@ -15,9 +15,16 @@ const taskSchema = new mongoose.Schema({
   title: { type: String, required: true },
   description: { type: String },
   status: { type: String, default: 'pending' },
-  type: { type: String, enum: ['seo', 'website', 'report'], default: 'seo' },
+  type: { type: String, default: 'seo' },
   category: { type: String, default: 'SEO' },
   project: { type: String, default: '' },
+  frequency: { type: String, default: 'weekly' },
+  dropboxUrl: { type: String, default: '' },
+  dropboxLink: { type: String, default: '' },
+  fileUrl: { type: String, default: '' },
+  link: { type: String, default: '' },
+  url: { type: String, default: '' },
+  uploadedBy: { type: String, default: 'Admin' },
   date: { type: String },
   readBy: { type: [String], default: [] },
   comments: { type: [commentSchema], default: [] },
@@ -32,6 +39,6 @@ const taskSchema = new mongoose.Schema({
     }],
     default: []
   }
-});
+}, { strict: false });
 
 module.exports = mongoose.model('Task', taskSchema);
